@@ -37,11 +37,10 @@ Prefer the bundled CLI for both image and video tasks.
 
 **Text-to-Image:**
 ```bash
-node skills/openclaw-ai-paint/scripts/cli.js generate \
-  --api-key "<your_api_key>" \
-  --prompt "<user's description>" \
-  --model gemini3pro \
-  --aspect-ratio 16:9
+# Node.js
+node scripts/cli.js generate --api-key "<key>" --prompt "<prompt>"
+# Python
+python3 scripts/cli.py generate --api-key "<key>" --prompt "<prompt>"
 ```
 
 **Image-to-Image:**
@@ -91,20 +90,27 @@ node skills/openclaw-ai-paint/scripts/cli.js video \
 #### Recommended Execution
 Prefer waiting for the final result in one command:
 ```bash
-node skills/openclaw-ai-paint/scripts/cli.js generate --api-key "<your_api_key>" --prompt "一只可爱的猫咪" --wait
+# Node.js
+node scripts/cli.js generate --api-key "<key>" --prompt "<prompt>" --wait
+# Python
+python3 scripts/cli.py generate --api-key "<key>" --prompt "<prompt>" --wait
 ```
 
 #### Manual Query
-If the API returns `status: "PROCESSING"` / `status: "PENDING"`, query by `id`:
+If the API returns `status: "PROCESSING"`, query by `id`:
 ```bash
-node skills/openclaw-ai-paint/scripts/cli.js query --api-key "<your_api_key>" --id <history_id>
+# Node.js
+node scripts/cli.js query --api-key "<key>" --id <id>
+# Python
+python3 scripts/cli.py query --api-key "<key>" --id <id>
 ```
 
 For video tasks, query by video history id:
 ```bash
-node skills/openclaw-ai-paint/scripts/cli.js video-query \
-  --api-key "<your_api_key>" \
-  --id <history_id>
+# Node.js
+node scripts/cli.js video-query --api-key "<key>" --id <id>
+# Python
+python3 scripts/cli.py video-query --api-key "<key>" --id <id>
 ```
 
 ### 🚨 Final Response Rules
