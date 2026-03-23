@@ -1,11 +1,11 @@
 ---
 name: ai-paint
-description: "Generate and edit images using AI Paint's Gemini models. CAPABILITIES: text-to-image, image-to-image editing, multi-image composition. Supports gemini3pro, nanobana-2, replicate models."
+description: "Generate images with AI Paint's Gemini models and generate videos with RunningHub-backed video models. CAPABILITIES: text-to-image, image-to-image editing, multi-image composition, text-to-video, image-to-video."
 ---
 
 # ai-paint
 
-This skill enables an AI Agent to generate and edit images using AI Paint's cloud-based Gemini models.
+This skill enables an AI Agent to generate/edit images with AI Paint and generate videos through AI Paint's Open API.
 
 ## 🛠️ Capabilities
 
@@ -14,6 +14,8 @@ This skill enables an AI Agent to generate and edit images using AI Paint's clou
 | `text_to_image` | Generate images from text prompts. Trigger when user asks to create/draw/generate an image. |
 | `image_to_image` | Edit existing images based on text instructions. Trigger when user asks to modify/edit/transform an image. |
 | `multi_image_compose` | Combine multiple images into one. Trigger when user asks to merge/combine/compose images. |
+| `text_to_video` | Generate a video from text only. Trigger when user asks to create/generate a short video clip. |
+| `image_to_video` | Generate a video from one or two reference images. Trigger when user asks to animate a reference image. |
 
 ## 🌟 The 3-Step Execution Methodology
 
@@ -24,10 +26,14 @@ Analyze the user's request to determine the operation type:
 - **Text-to-Image**: User provides only a text description (e.g., "画一只猫", "a sunset over mountains")
 - **Image-to-Image**: User provides an image + editing instruction (e.g., "把背景换成海滩" + image)
 - **Multi-Image**: User provides multiple images + composition instruction
+- **Text-to-Video**: User asks for a short clip without reference images
+- **Image-to-Video**: User provides one or two images and asks to animate them
 
 ### Step 2: Parameter Preparation
 
-Based on the operation type, prepare the parameters:
+Based on the operation type, prepare the parameters.
+
+Prefer the bundled CLI for both image and video tasks.
 
 **Text-to-Image:**
 ```bash
@@ -56,6 +62,30 @@ node skills/openclaw-ai-paint/scripts/cli.js generate \
   --aspect-ratio 16:9
 ```
 
+**Text-to-Video:**
+```bash
+node skills/openclaw-ai-paint/scripts/cli.js video \
+  --api-key "<your_api_key>" \
+  --prompt "<video prompt>" \
+  --model rhart-video-g \
+  --aspect-ratio 1:1 \
+  --resolution 720P \
+  --duration 6s \
+  --wait
+```
+
+**Image-to-Video:**
+```bash
+node skills/openclaw-ai-paint/scripts/cli.js video \
+  --api-key "<your_api_key>" \
+  --prompt "<animation instruction>" \
+  --model kling-v3.0-std \
+  --images "<image_url_or_local_path>" \
+  --aspect-ratio 16:9 \
+  --duration 5 \
+  --wait
+```
+
 ### Step 3: Execution & Response
 
 #### Recommended Execution
@@ -70,10 +100,19 @@ If the API returns `status: "PROCESSING"` / `status: "PENDING"`, query by `id`:
 node skills/openclaw-ai-paint/scripts/cli.js query --api-key "<your_api_key>" --id <history_id>
 ```
 
+For video tasks, query by video history id:
+```bash
+node skills/openclaw-ai-paint/scripts/cli.js video-query \
+  --api-key "<your_api_key>" \
+  --id <history_id>
+```
+
 ### 🚨 Final Response Rules
 
 - **Image Output**: If `output[0].image_url.url` exists, return that URL directly as a clickable link or embedded image
+- **Video Output**: If `output[0].video_url.url` exists, return that URL directly as a clickable link
 - **Format**: `![Generated Image](image_url)` or `[点击查看生成的图片](image_url)`
+- **Video Format**: `[点击查看生成的视频](video_url)`
 - **In-Progress**: If `status` is `PROCESSING` or `PENDING`, continue polling instead of claiming success
 - **Multiple Images**: List all generated image URLs if `--number` was used
 
@@ -101,6 +140,20 @@ node skills/openclaw-ai-paint/scripts/cli.js query --api-key "<your_api_key>" --
 | `--poll-interval` | Poll interval in milliseconds | `5000` |
 | `--max-wait` | Max wait time in milliseconds | `300000` |
 
+### Video API Parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `--model` | `rhart-video-g` or `kling-v3.0-std` |
+| `--images` | 参考图 URL 或本地路径，最多 2 张 |
+| `--aspect-ratio` | 视频比例，取值受模型限制 |
+| `--resolution` | 仅 `rhart-video-g` 支持 `720P` / `1080P` |
+| `--duration` | `rhart-video-g`: `6s/10s/15s`; `kling-v3.0-std`: `3-15` 秒 |
+| `--negative-prompt` | 仅 `kling-v3.0-std` |
+| `--cfg-scale` | 仅 `kling-v3.0-std`，范围 `0-1` |
+| `--sound` | 仅 `kling-v3.0-std` |
+| `--multi-prompt` | 仅 `kling-v3.0-std`，传 JSON 数组字符串 |
+
 ### Available Aspect Ratios
 - `match_input_image` - Match input image ratio
 - `1:1` - Square (avatars, social media)
@@ -122,6 +175,8 @@ node skills/openclaw-ai-paint/scripts/cli.js query --api-key "<your_api_key>" --
 | replicate | 3 credits |
 | gemini3pro (2K) | 4 credits |
 | gemini3pro (4K) | 8 credits |
+
+Video costs follow the current AI Paint backend configuration. Do not hardcode them in the agent unless the API response or product pricing page explicitly provides the current value.
 
 ---
 
@@ -199,6 +254,27 @@ node skills/openclaw-ai-paint/scripts/cli.js generate \
   --wait
 ```
 
+### Example 4: Generate a short video
+**User**: "生成一个咖啡馆氛围的 6 秒短视频"
+**Agent**:
+```bash
+node skills/openclaw-ai-paint/scripts/cli.js video \
+  --api-key "<your_api_key>" \
+  --prompt "A cozy coffee shop scene, cinematic camera movement, warm lighting" \
+  --model rhart-video-g \
+  --aspect-ratio 1:1 \
+  --resolution 720P \
+  --duration 6s \
+  --wait
+```
+
+Manual query if needed:
+```bash
+node skills/openclaw-ai-paint/scripts/cli.js video-query \
+  --api-key "<your_api_key>" \
+  --id <history_id>
+```
+
 ---
 
 ## 🔧 Troubleshooting
@@ -211,3 +287,4 @@ node skills/openclaw-ai-paint/scripts/cli.js generate \
 | `Rate limit exceeded` | Too many requests | Wait and retry |
 | `Invalid API key` | Wrong or expired key | Check key in profile settings |
 | `积分不足` | Insufficient credits | Top up credits in AI Paint |
+| `status=PROCESSING` (video) | 视频仍在生成中 | Continue polling `GET /api/v1/video/:id` |

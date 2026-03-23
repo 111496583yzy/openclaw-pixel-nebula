@@ -133,6 +133,126 @@ GET /api/v1/gemini-edit/:id
 
 ---
 
+### 3. Generate Video
+生成视频。当前对外 API 支持 `RunningHub` 两个视频模型：
+
+- `rhart-video-g`
+- `kling-v3.0-std`
+
+```
+POST /api/v1/video
+```
+
+**Request Body**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `prompt` | string | ✅ | 提示词，长度 5-800 字符 |
+| `model` | string | ✅ | `rhart-video-g` 或 `kling-v3.0-std` |
+| `image_urls` | string[] | - | 参考图 URL 列表，最多 2 张；支持 `http/https/data:image` |
+| `aspect_ratio` | string | - | `rhart-video-g`: `2:3`, `3:2`, `1:1`；`kling-v3.0-std`: `1:1`, `16:9`, `9:16` |
+| `resolution` | string | - | 仅 `rhart-video-g`：`720P`, `1080P` |
+| `duration` | string/number | - | `rhart-video-g`: `6s`, `10s`, `15s`；`kling-v3.0-std`: `3-15` 秒 |
+| `negative_prompt` | string | - | 仅 `kling-v3.0-std` |
+| `cfg_scale` | number | - | 仅 `kling-v3.0-std`，范围 `0-1` |
+| `sound` | boolean | - | 仅 `kling-v3.0-std` |
+| `multi_prompt` | array | - | 仅 `kling-v3.0-std` |
+
+**Response**
+
+视频任务当前统一为异步，创建后先返回：
+
+```json
+{
+  "id": 67890,
+  "object": "video",
+  "created_at": 1710000000,
+  "model": "rhart-video-g",
+  "status": "PROCESSING",
+  "output": [],
+  "task_id": "2000000000000000001",
+  "usage": {
+    "credits_used": 3
+  }
+}
+```
+
+此时请继续调用 `GET /api/v1/video/:id` 轮询结果。
+
+---
+
+### 4. Get Video Result
+查询视频结果。
+
+```
+GET /api/v1/video/:id
+```
+
+**Completed Response**
+
+```json
+{
+  "id": 67890,
+  "object": "video",
+  "created_at": 1710000000,
+  "model": "rhart-video-g",
+  "status": "COMPLETED",
+  "output": [
+    {
+      "type": "video_url",
+      "video_url": {
+        "url": "https://..."
+      },
+      "thumbnail_url": "https://..."
+    }
+  ],
+  "task_id": "2000000000000000001",
+  "usage": {
+    "credits_used": 3
+  }
+}
+```
+
+**Still Processing**
+
+```json
+{
+  "id": 67890,
+  "object": "video",
+  "created_at": 1710000000,
+  "model": "rhart-video-g",
+  "status": "PROCESSING",
+  "output": [],
+  "task_id": "2000000000000000001",
+  "usage": {
+    "credits_used": 3
+  }
+}
+```
+
+**Failed**
+
+```json
+{
+  "id": 67890,
+  "object": "video",
+  "created_at": 1710000000,
+  "model": "rhart-video-g",
+  "status": "FAILED",
+  "output": [],
+  "task_id": "2000000000000000001",
+  "usage": {
+    "credits_used": 3
+  },
+  "error": {
+    "message": "视频生成失败",
+    "type": "api_error"
+  }
+}
+```
+
+---
+
 ## Rate Limiting
 
 响应 Header 包含限流信息：
@@ -169,7 +289,7 @@ X-RateLimit-Remaining: 45    # 剩余次数
 
 ## Code Examples
 
-### Python
+### Python: Image
 
 ```python
 import requests
@@ -199,7 +319,7 @@ else:
     print(f"Processing: id={data['id']} status={data.get('status')}")
 ```
 
-### cURL
+### cURL: Image
 
 ```bash
 curl -X POST https://caca.yzycolour.top/api/v1/gemini-edit \
@@ -212,7 +332,7 @@ curl -X POST https://caca.yzycolour.top/api/v1/gemini-edit \
   }'
 ```
 
-### JavaScript
+### JavaScript: Image
 
 ```javascript
 const response = await fetch('https://caca.yzycolour.top/api/v1/gemini-edit', {
@@ -233,6 +353,63 @@ if (data.status === 'COMPLETED' && data.output?.length) {
   console.log(data.output[0].image_url.url);
 } else {
   console.log(`processing: id=${data.id} status=${data.status}`);
+}
+```
+
+### cURL: Video Create
+
+```bash
+curl -X POST https://caca.yzycolour.top/api/v1/video \
+  -H "Authorization: Bearer sk-your_api_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "A cinematic panda drinking coffee in the rain",
+    "model": "rhart-video-g",
+    "aspect_ratio": "1:1",
+    "resolution": "720P",
+    "duration": "6s"
+  }'
+```
+
+### cURL: Video Query
+
+```bash
+curl -X GET https://caca.yzycolour.top/api/v1/video/67890 \
+  -H "Authorization: Bearer sk-your_api_key_here"
+```
+
+### JavaScript: Video
+
+```javascript
+const createRes = await fetch('https://caca.yzycolour.top/api/v1/video', {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer sk-your_api_key_here',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    prompt: 'A cinematic panda drinking coffee in the rain',
+    model: 'rhart-video-g',
+    aspect_ratio: '1:1',
+    resolution: '720P',
+    duration: '6s'
+  })
+});
+
+const created = await createRes.json();
+console.log(created.id, created.task_id, created.status);
+
+const queryRes = await fetch(`https://caca.yzycolour.top/api/v1/video/${created.id}`, {
+  headers: {
+    'Authorization': 'Bearer sk-your_api_key_here'
+  }
+});
+
+const result = await queryRes.json();
+if (result.status === 'COMPLETED' && result.output?.length) {
+  console.log(result.output[0].video_url.url);
+} else {
+  console.log(`processing: id=${result.id} status=${result.status}`);
 }
 ```
 
@@ -261,8 +438,10 @@ if (data.status === 'COMPLETED' && data.output?.length) {
 - 文生图：纯文字描述生成图片
 - 图生图：基于参考图编辑
 - 多图编辑：多张图片组合编辑
+- 文生视频：通过 `/api/v1/video` 调用 `rhart-video-g` / `kling-v3.0-std`
 
 **使用方式：**
 1. 在 OpenClaw 中加载 skill 文件
 2. 确保 API Key 已配置
-3. OpenClaw 会自动调用 API 生成图片
+3. 图片任务可直接走 bundled CLI
+4. 视频任务请直接调用 `/api/v1/video` 和 `/api/v1/video/:id`

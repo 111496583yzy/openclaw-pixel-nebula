@@ -6,7 +6,9 @@
  *   node skills/openclaw-ai-paint/scripts/cli.js generate --api-key "sk-xxx" --prompt "描述" --model gemini3pro
  *   node skills/openclaw-ai-paint/scripts/cli.js generate --api-key "sk-xxx" --prompt "描述" --images "https://..."
  *   node skills/openclaw-ai-paint/scripts/cli.js generate --api-key "sk-xxx" --prompt "描述" --wait
+ *   node skills/openclaw-ai-paint/scripts/cli.js video --api-key "sk-xxx" --prompt "视频描述" --model rhart-video-g --wait
  *   node skills/openclaw-ai-paint/scripts/cli.js query --id 12345
+ *   node skills/openclaw-ai-paint/scripts/cli.js video-query --id 67890
  * 
  * 环境变量:
  *   AI_PAINT_API_KEY  - API Key (可选，作为 --api-key 的兜底)
@@ -41,6 +43,29 @@ function getResultStatus(result) {
 
 function getApiKey(params = {}) {
     return String(params.api_key || process.env.AI_PAINT_API_KEY || '').trim();
+}
+
+function parseBoolean(value, defaultValue = false) {
+    if (value === undefined) return defaultValue;
+    if (typeof value === 'boolean') return value;
+    const normalized = String(value).trim().toLowerCase();
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+    if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+    return defaultValue;
+}
+
+function parseJsonArray(value, fieldName) {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (Array.isArray(value)) return value;
+    try {
+        const parsed = JSON.parse(value);
+        if (!Array.isArray(parsed)) {
+            throw new Error(`${fieldName} 必须是 JSON 数组`);
+        }
+        return parsed;
+    } catch (error) {
+        throw new Error(`${fieldName} 解析失败，请传合法的 JSON 数组字符串`);
+    }
 }
 
 // 辅助函数：构建完整的 API URL
@@ -205,6 +230,30 @@ async function uploadImage(filePath, apiKey) {
     return completeData.proxyUrl;
 }
 
+async function resolveImageInputs(rawImages, apiKey) {
+    if (!rawImages) return [];
+
+    const imageInputs = String(rawImages).split(',').map(s => s.trim()).filter(Boolean);
+    const imageUrls = [];
+
+    for (const input of imageInputs) {
+        if (input.startsWith('http://') || input.startsWith('https://') || input.startsWith('data:')) {
+            imageUrls.push(input);
+            continue;
+        }
+
+        console.warn(`[CLI] 检测到本地文件，正在处理上传: ${input}`);
+        try {
+            const uploadedUrl = await uploadImage(input, apiKey);
+            imageUrls.push(uploadedUrl);
+        } catch (err) {
+            throw new Error(`上传本地文件失败 (${input}): ${err.message}`);
+        }
+    }
+
+    return imageUrls;
+}
+
 // 生成图片
 async function generate(params) {
     const apiKey = getApiKey(params);
@@ -223,22 +272,7 @@ async function generate(params) {
     };
 
     if (params.images) {
-        const imageInputs = params.images.split(',').map(s => s.trim()).filter(Boolean);
-        const imageUrls = [];
-        
-        for (const input of imageInputs) {
-            if (input.startsWith('http://') || input.startsWith('https://') || input.startsWith('data:')) {
-                imageUrls.push(input);
-            } else {
-                console.warn(`[CLI] 检测到本地文件，正在处理上传: ${input}`);
-                try {
-                    const uploadedUrl = await uploadImage(input, apiKey);
-                    imageUrls.push(uploadedUrl);
-                } catch (err) {
-                    throw new Error(`上传本地文件失败 (${input}): ${err.message}`);
-                }
-            }
-        }
+        const imageUrls = await resolveImageInputs(params.images, apiKey);
         body.image_urls = imageUrls;
     }
     
@@ -251,6 +285,50 @@ async function generate(params) {
 
     const result = await request('POST', 'gemini-edit', apiKey, body);
     return result;
+}
+
+async function generateVideo(params) {
+    const apiKey = getApiKey(params);
+    if (!apiKey) {
+        throw new Error('--api-key 参数必填，或设置 AI_PAINT_API_KEY 环境变量');
+    }
+
+    if (!params.prompt) {
+        throw new Error('--prompt 参数必填');
+    }
+
+    const model = params.model || 'rhart-video-g';
+    const body = {
+        prompt: params.prompt,
+        model
+    };
+
+    if (params.images) {
+        body.image_urls = await resolveImageInputs(params.images, apiKey);
+    }
+
+    if (model === 'rhart-video-g') {
+        body.aspect_ratio = params.aspect_ratio || '1:1';
+        body.resolution = params.resolution || '720P';
+        body.duration = params.duration || '6s';
+    } else if (model === 'kling-v3.0-std') {
+        body.aspect_ratio = params.aspect_ratio || '16:9';
+        body.duration = params.duration || '5';
+        if (params.negative_prompt) {
+            body.negative_prompt = params.negative_prompt;
+        }
+        if (params.cfg_scale !== undefined) {
+            body.cfg_scale = Number(params.cfg_scale);
+        }
+        if (params.sound !== undefined) {
+            body.sound = parseBoolean(params.sound, false);
+        }
+        if (params.multi_prompt !== undefined) {
+            body.multi_prompt = parseJsonArray(params.multi_prompt, '--multi-prompt');
+        }
+    }
+
+    return await request('POST', 'video', apiKey, body);
 }
 
 // 查询结果
@@ -266,14 +344,26 @@ async function query(id, params = {}) {
     return await request('GET', `gemini-edit/${id}`, apiKey);
 }
 
-async function waitForCompletion(id, params = {}) {
+async function queryVideo(id, params = {}) {
+    const apiKey = getApiKey(params);
+    if (!apiKey) {
+        throw new Error('--api-key 参数必填，或设置 AI_PAINT_API_KEY 环境变量');
+    }
+
+    if (!id) {
+        throw new Error('--id 参数必填');
+    }
+    return await request('GET', `video/${id}`, apiKey);
+}
+
+async function waitForCompletion(queryFn, id, params = {}) {
     const pollIntervalMs = Math.max(1000, parseInt(params.poll_interval, 10) || 5000);
     const maxWaitMs = Math.max(pollIntervalMs, parseInt(params.max_wait, 10) || 300000);
     const deadline = Date.now() + maxWaitMs;
     let lastResult = null;
 
     while (Date.now() <= deadline) {
-        lastResult = await query(id, params);
+        lastResult = await queryFn(id, params);
         const status = getResultStatus(lastResult);
 
         if (status === 'COMPLETED') {
@@ -295,6 +385,46 @@ async function waitForCompletion(id, params = {}) {
 async function main() {
     const [command, ...rest] = process.argv.slice(2);
     const params = parseArgs(rest);
+
+    const isHelpCommand = !command || ['help', '--help', '-h'].includes(command);
+
+    if (isHelpCommand) {
+        console.log(`
+AI Paint OpenClaw Tool
+
+用法:
+  node skills/openclaw-ai-paint/scripts/cli.js generate --api-key "sk-xxx" --prompt "描述文字"
+  node skills/openclaw-ai-paint/scripts/cli.js generate --api-key "sk-xxx" --prompt "描述" --images "url1,url2"
+  node skills/openclaw-ai-paint/scripts/cli.js generate --api-key "sk-xxx" --prompt "描述" --images "./local_image.png"
+  node skills/openclaw-ai-paint/scripts/cli.js generate --api-key "sk-xxx" --prompt "描述" --wait
+  node skills/openclaw-ai-paint/scripts/cli.js video --api-key "sk-xxx" --prompt "视频描述" --model rhart-video-g --wait
+  node skills/openclaw-ai-paint/scripts/cli.js query --api-key "sk-xxx" --id 12345
+  node skills/openclaw-ai-paint/scripts/cli.js video-query --api-key "sk-xxx" --id 67890
+
+参数:
+  --api-key       API Key (优先于环境变量)
+  --prompt        提示词 (必填)
+  --model         图片: gemini3pro/nanobana-2/replicate；视频: rhart-video-g/kling-v3.0-std
+  --aspect-ratio  比例: 图片默认 16:9；视频按模型限制
+  --images        参考图 URL 或本地文件路径，逗号分隔
+  --size          图片尺寸: 1K, 2K, 4K (仅 gemini3pro)
+  --number        图片生成数量 1-4 (仅 gemini3pro)
+  --resolution    视频分辨率: 720P, 1080P (仅 rhart-video-g)
+  --duration      视频时长: rhart-video-g 用 6s/10s/15s；kling 用 3-15
+  --negative-prompt  视频负向提示词 (仅 kling-v3.0-std)
+  --cfg-scale     视频 cfg_scale (仅 kling-v3.0-std)
+  --sound         视频是否带声音 true/false (仅 kling-v3.0-std)
+  --multi-prompt  视频 multi_prompt，传 JSON 数组字符串 (仅 kling-v3.0-std)
+  --wait          自动轮询直到完成
+  --poll-interval 轮询间隔毫秒 (默认 5000)
+  --max-wait      最大等待毫秒 (默认 300000)
+
+环境变量:
+  AI_PAINT_API_KEY   API Key (可选兜底)
+  AI_PAINT_BASE_URL  API Root 地址 (默认 https://caca.yzycolour.top/api)
+`);
+        process.exit(0);
+    }
 
     if (!getApiKey(params)) {
         console.error(JSON.stringify({
@@ -318,45 +448,36 @@ async function main() {
                     const status = getResultStatus(result);
                     result = status === 'COMPLETED'
                         ? result
-                        : await waitForCompletion(id, params);
+                        : await waitForCompletion(query, id, params);
+                }
+                break;
+            case 'video':
+            case 'video-generate':
+            case 'video-gen':
+                result = await generateVideo(params);
+                if (params.wait) {
+                    const id = result?.id;
+                    if (!id) {
+                        throw new Error('视频生成响应缺少 id，无法轮询结果');
+                    }
+                    const status = getResultStatus(result);
+                    result = status === 'COMPLETED'
+                        ? result
+                        : await waitForCompletion(queryVideo, id, params);
                 }
                 break;
             case 'query':
             case 'status':
                 result = params.wait
-                    ? await waitForCompletion(params.id, params)
+                    ? await waitForCompletion(query, params.id, params)
                     : await query(params.id, params);
                 break;
-            case 'help':
-            case '--help':
-            case '-h':
-                console.log(`
-AI Paint OpenClaw Tool
-
-用法:
-  node skills/openclaw-ai-paint/scripts/cli.js generate --api-key "sk-xxx" --prompt "描述文字"
-  node skills/openclaw-ai-paint/scripts/cli.js generate --api-key "sk-xxx" --prompt "描述" --images "url1,url2"
-  node skills/openclaw-ai-paint/scripts/cli.js generate --api-key "sk-xxx" --prompt "描述" --images "./local_image.png"
-  node skills/openclaw-ai-paint/scripts/cli.js generate --api-key "sk-xxx" --prompt "描述" --wait
-  node skills/openclaw-ai-paint/scripts/cli.js query --api-key "sk-xxx" --id 12345
-
-参数:
-  --api-key       API Key (优先于环境变量)
-  --prompt        提示词 (必填)
-  --model         模型: gemini3pro, nanobana-2, replicate (默认 gemini3pro)
-  --aspect-ratio  比例: 1:1, 16:9, 9:16 等 (默认 16:9)
-  --images        参考图 URL 或本地文件路径，逗号分隔
-  --size          尺寸: 1K, 2K, 4K (仅 gemini3pro)
-  --number        生成数量 1-4 (仅 gemini3pro)
-  --wait          自动轮询直到完成
-  --poll-interval 轮询间隔毫秒 (默认 5000)
-  --max-wait      最大等待毫秒 (默认 300000)
-
-环境变量:
-  AI_PAINT_API_KEY   API Key (可选兜底)
-  AI_PAINT_BASE_URL  API Root 地址 (默认 https://caca.yzycolour.top/api)
-`);
-                process.exit(0);
+            case 'video-query':
+            case 'video-status':
+                result = params.wait
+                    ? await waitForCompletion(queryVideo, params.id, params)
+                    : await queryVideo(params.id, params);
+                break;
             default:
                 throw new Error(`未知命令: ${command || '(空)'}，使用 --help 查看帮助`);
         }
